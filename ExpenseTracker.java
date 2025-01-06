@@ -2,6 +2,9 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.*;
+import java.sql.*;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -15,17 +18,36 @@ public class ExpenseTracker {
     private double totalExpenses = 0.0;
     private Map<String, Double> categorySummary = new HashMap<>();
 
+    private Connection connection;
+
     public ExpenseTracker() {
+        initializeDatabase();
         initializeUI();
+        loadExpensesFromDatabase();
+    }
+
+    private void initializeDatabase() {
+        try {
+            connection = DriverManager.getConnection("jdbc:sqlite:expenses.db");
+            Statement statement = connection.createStatement();
+            String createTableSQL = "CREATE TABLE IF NOT EXISTS expenses (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "amount REAL, " +
+                    "category TEXT, " +
+                    "date TEXT, " +
+                    "time TEXT)";
+            statement.execute(createTableSQL);
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(frame, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            System.exit(1);
+        }
     }
 
     private void initializeUI() {
-        // Main frame setup
         frame = new JFrame("Expense Tracker");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(600, 400);
+        frame.setSize(700, 500);
 
-        // Main panel
         JPanel panel = new JPanel();
         panel.setLayout(new BorderLayout());
 
@@ -54,7 +76,7 @@ public class ExpenseTracker {
         buttonPanel.add(clearButton);
 
         // Table for displaying expenses
-        String[] columnNames = {"Category", "Amount"};
+        String[] columnNames = {"Date", "Time", "Category", "Amount"};
         tableModel = new DefaultTableModel(columnNames, 0);
         JTable table = new JTable(tableModel);
         JScrollPane tableScrollPane = new JScrollPane(table);
@@ -65,17 +87,13 @@ public class ExpenseTracker {
         totalLabel = new JLabel("Total Expenses: ₹0.00");
         summaryPanel.add(totalLabel);
 
-        // Adding components to the main panel
         panel.add(inputPanel, BorderLayout.NORTH);
         panel.add(buttonPanel, BorderLayout.CENTER);
         panel.add(tableScrollPane, BorderLayout.SOUTH);
         frame.add(panel, BorderLayout.CENTER);
         frame.add(summaryPanel, BorderLayout.SOUTH);
 
-        // Add Expense Button Action
         addButton.addActionListener(e -> addExpense());
-
-        // Clear Button Action
         clearButton.addActionListener(e -> clearExpenses());
 
         frame.setVisible(true);
@@ -86,8 +104,22 @@ public class ExpenseTracker {
             double amount = Double.parseDouble(amountField.getText());
             String category = (String) categoryBox.getSelectedItem();
 
+            LocalDateTime now = LocalDateTime.now();
+            String date = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            String time = now.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+
+            // Add to database
+            String insertSQL = "INSERT INTO expenses (amount, category, date, time) VALUES (?, ?, ?, ?)";
+            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+                preparedStatement.setDouble(1, amount);
+                preparedStatement.setString(2, category);
+                preparedStatement.setString(3, date);
+                preparedStatement.setString(4, time);
+                preparedStatement.executeUpdate();
+            }
+
             // Add to table
-            tableModel.addRow(new Object[]{category, "₹" + amount});
+            tableModel.addRow(new Object[]{date, time, category, "₹" + amount});
 
             // Update total and category summary
             totalExpenses += amount;
@@ -97,14 +129,48 @@ public class ExpenseTracker {
             amountField.setText("");
         } catch (NumberFormatException ex) {
             JOptionPane.showMessageDialog(frame, "Please enter a valid amount.", "Invalid Input", JOptionPane.ERROR_MESSAGE);
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(frame, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 
     private void clearExpenses() {
-        tableModel.setRowCount(0);
-        totalExpenses = 0.0;
-        categorySummary.clear();
-        updateSummary();
+        try {
+            String deleteSQL = "DELETE FROM expenses";
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(deleteSQL);
+            }
+            tableModel.setRowCount(0);
+            totalExpenses = 0.0;
+            categorySummary.clear();
+            updateSummary();
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(frame, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void loadExpensesFromDatabase() {
+        try {
+            String querySQL = "SELECT date, time, category, amount FROM expenses";
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(querySQL)) {
+
+                while (resultSet.next()) {
+                    String date = resultSet.getString("date");
+                    String time = resultSet.getString("time");
+                    String category = resultSet.getString("category");
+                    double amount = resultSet.getDouble("amount");
+
+                    tableModel.addRow(new Object[]{date, time, category, "₹" + amount});
+
+                    totalExpenses += amount;
+                    categorySummary.put(category, categorySummary.getOrDefault(category, 0.0) + amount);
+                }
+                updateSummary();
+            }
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(frame, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private void updateSummary() {
